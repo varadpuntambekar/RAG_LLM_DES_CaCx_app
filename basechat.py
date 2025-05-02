@@ -13,6 +13,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 import os
 import pprint
+import pymupdf
+from PIL import Image
+import io
 
 embedding_model = OllamaEmbeddings(model = 'nomic-embed-text')
 
@@ -41,6 +44,24 @@ def load_docs (directory_path):
 
 #loaded_docs = load_docs(directory_path)
 
+def load_pages_from_docs(directory_path):
+    '''
+    Loads all pdf files from the directory, Splits every doc into pages and attaches pages as a metadata to those files
+    Important to trace where this chunk came from and then display it as well
+    '''
+
+    print(f"======Loading docs from folder {directory_path}============")
+    docs = []
+    for file in os.listdir(directory_path):
+        loader = PyPDFLoader(os.path.join(directory_path, file), mode = 'page')
+        #loading one page at a time I hope
+        one_page = loader.load()
+        docs.extend(one_page)
+
+    print(f"==Loaded {len(docs)}=== documents")
+    #print(docs[0].metadata)
+    
+    return docs
 
 def split_docs_with_metadata(document_list):
     '''
@@ -50,8 +71,8 @@ def split_docs_with_metadata(document_list):
     #initializing the text splitter, here I use a premade text splitter specified by langchain
     
     text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size = 1000,
-    chunk_overlap = 50,
+    chunk_size = 500,
+    chunk_overlap = 100,
     length_function = len)
 
     chunked_docs = [] #list of chunks
@@ -147,16 +168,16 @@ def add_file_to_db(documents, vectorstore):
 
 chroma_directory = 'chroma_db_2.0'
 chroma_collection = 'chunk_store'
-loaded_vector_db = load_vectorstore (chroma_directory, chroma_collection, embedding_model )
+#loaded_vector_db = load_vectorstore (chroma_directory, chroma_collection, embedding_model )
 
-def relevant_chunks(query, n_results = 3):
+def relevant_chunks(vector_db, query, n_results = 3):
     '''
     Takes in a query, returns a list[Documents] type object of relevant chunks that are closest to the query
     '''
-    retriever = loaded_vector_db.as_retriever(search_kwargs = {"k": n_results})
+    retriever = vector_db.as_retriever(search_kwargs = {"k": n_results})
     retrieved_docs = retriever.invoke(query)
-    #for result in retrieved_docs:
-        #print(result.metadata['source'], result.page_content[:100])
+    for result in retrieved_docs:
+        print(result.metadata['source'])
 
     return retrieved_docs
 
@@ -168,14 +189,19 @@ def chat():
     human_message = input("Which document would you like to query (RAG) ")
     get_chunks = relevant_chunks(human_message)
     context = "\n\n".join([chunk.page_content for chunk in get_chunks])
-    print(f"The retrieved document is {get_chunks[0].metadata['source']}.  \n The context is as follows \n {context}")
+
+    
+    
+
+
+    print(f"The retrieved document is {get_chunks[0].metadata}.  \n The context is as follows \n {context}")
     template = '''
         You are a question answer answering assistant. Use the following pieces of data from the retrieved context only to answer the question
         If you don't know the answer to the question then answer by saying I don't know or answering this question is out of my scope
         Use three sentences maximum and keep your explanations simple and concise as if explaining a beginner.
 
         "Context": {context}
-        "Question":{question}
+        "Question":{human_message}
         "Answer":
 
         '''
@@ -198,6 +224,57 @@ def chat():
             result = rag_chain.invoke(human_message)
             print("AI Says: ", result)
             context += f"\nUser:{human_message}\n AI: {result}  "
+
+
+#Display chunk in document
+def chunk_in_doc():
+    '''
+    When we retrieve a chunk from the list of documents, This function matches the page number from the chunk metadata
+    with the metadata of the document list and then highlights the information in the document
+    '''
+    # docs = load_pages_from_docs(directory_path)
+
+    # print(docs[0].metadata)
+    
+    # page_chunks = split_docs_with_metadata(document_list=docs)
+    
+    chroma_page_directory = 'chroma_db_page_2.0'
+    chroma_page_collection = 'chunk_page_storea_2.0'
+
+    loaded_page_vector_db = load_vectorstore(persist_directory= chroma_page_directory, collection_name= chroma_page_collection
+                                             , embedding_model=embedding_model)
+
+    
+    
+    query = input("What is your query from the RAG System?")
+    get_chunk = relevant_chunks(loaded_page_vector_db, query)
+
+    print(get_chunk[0].metadata)
+
+    #    
+
+    # page_vectorstore = create_vectorstore(page_chunks, embedding_model=embedding_model, persist_directory=chroma_page_directory, 
+    #                                       collection_name=chroma_page_collection)
+    
+    # print("======Page Embedding Complete========")
+    
+    # return page_vectorstore
+
+    relevant_page_source = get_chunk[0].metadata['source']
+    relevant_page_num = get_chunk[0].metadata['page']
+
+    relevant_page_upload = pymupdf.open(relevant_page_source)
+    relevant_page = relevant_page_upload.load_page(relevant_page_num)
+
+    highlight_instances = relevant_page.search_for(get_chunk[0].page_content, quads = False) #returns a list of rectangle objects that contain the text in the get chunk page content
+    relevant_page.add_highlight_annot(highlight_instances)
+    
+    pix = relevant_page.get_pixmap(annots = True)
+    img_data = pix.tobytes('png')
+    img = Image.open(io.BytesIO(img_data))
+    img.show()
+
+
 
 
 
@@ -293,6 +370,6 @@ def chat():
 # #Adding and embedding documents
 
 if __name__ == "__main__":
-     chat()
+    chunk_in_doc()     
 
 
